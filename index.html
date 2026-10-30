@@ -1,1 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Outline</title>
+<style>
+  * { border-radius: 0; box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: #fff; color: #000; font: 16px monospace; }
+  h1 { font-size: 16px; margin: 0 0 16px; }
+  .row { margin: 0 0 12px; }
+  label { margin-right: 12px; cursor: pointer; }
+  input[type=text] { width: 120px; border: 1px solid #000; padding: 4px; font: inherit; background: #fff; color: #000; }
+  button { border: 1px solid #000; background: #fff; color: #000; padding: 4px 8px; font: inherit; cursor: pointer; }
+  button:hover { background: #000; color: #fff; }
+  #wrap { border: 1px solid #000; display: inline-block; max-width: 100%; overflow: auto; line-height: 0; }
+  canvas { max-width: 100%; height: auto; }
+</style>
+</head>
+<body>
+<h1>OUTLINE</h1>
+<div class="row"><input type="file" id="file" accept="image/*"></div>
+<div class="row">
+  <label><input type="checkbox" id="up" checked> up</label>
+  <label><input type="checkbox" id="down" checked> down</label>
+  <label><input type="checkbox" id="left" checked> left</label>
+  <label><input type="checkbox" id="right" checked> right</label>
+</div>
+<div class="row">
+  length (px): <input type="text" id="len" value="10" inputmode="numeric" autocomplete="off">
+  &nbsp;
+  <label><input type="radio" name="c" value="black" checked> black</label>
+  <label><input type="radio" name="c" value="white"> white</label>
+</div>
+<div class="row"><button id="save">download png</button></div>
+<div id="wrap"><canvas id="cv" width="1" height="1"></canvas></div>
+<script>
+const MAX_SIDE = 16000, MAX_AREA = 64e6;
+const $ = id => document.getElementById(id);
+const cv = $('cv'), ctx = cv.getContext('2d'), wrap = $('wrap');
+let img = null, src = null, srcA = null, sw = 0, sh = 0, pending = false;
 
+$('file').onchange = e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const im = new Image();
+  im.onload = () => {
+    sw = im.naturalWidth; sh = im.naturalHeight;
+    const c = document.createElement('canvas');
+    c.width = sw; c.height = sh;
+    const x = c.getContext('2d', { willReadFrequently: true });
+    x.drawImage(im, 0, 0);
+    const d = x.getImageData(0, 0, sw, sh).data;
+    srcA = new Uint8Array(sw * sh);
+    for (let i = 0; i < srcA.length; i++) srcA[i] = d[i * 4 + 3] > 0 ? 1 : 0;
+    img = im;
+    schedule();
+  };
+  im.src = URL.createObjectURL(f);
+};
+
+document.querySelectorAll('input').forEach(el => {
+  if (el.type !== 'file') el.addEventListener('input', schedule);
+});
+
+function schedule() {
+  if (pending) return;
+  pending = true;
+  requestAnimationFrame(() => { pending = false; render(); });
+}
+
+function render() {
+  if (!img) return;
+  const u = $('up').checked, d = $('down').checked, l = $('left').checked, r = $('right').checked;
+  const white = document.querySelector('input[name=c]:checked').value === 'white';
+  wrap.style.background = white ? '#000' : '#fff';
+
+  let n = parseInt($('len').value.replace(/\D/g, ''), 10);
+  if (!(n > 0)) n = 0;
+  // pad per side, capped so the canvas stays within browser limits
+  let padL = l ? n : 0, padR = r ? n : 0, padU = u ? n : 0, padD = d ? n : 0;
+  let k = n;
+  while (k > 0) {
+    const W = sw + (l ? k : 0) + (r ? k : 0), H = sh + (u ? k : 0) + (d ? k : 0);
+    if (W <= MAX_SIDE && H <= MAX_SIDE && W * H <= MAX_AREA) break;
+    k = Math.floor(k * 0.9);
+  }
+  padL = l ? k : 0; padR = r ? k : 0; padU = u ? k : 0; padD = d ? k : 0;
+  const W = sw + padL + padR, H = sh + padU + padD;
+
+  // mask of source opacity placed on the padded grid
+  const m = new Uint8Array(W * H);
+  for (let y = 0; y < sh; y++) m.set(srcA.subarray(y * sw, y * sw + sw), (y + padU) * W + padL);
+  const out = new Uint8Array(m);
+
+  // each direction: pixel is outlined if an opaque pixel lies within k px the opposite way. O(pixels), independent of k.
+  const INF = 1e9;
+  if (l) for (let y = 0; y < H; y++) { let last = INF; for (let x = W - 1; x >= 0; x--) { const i = y * W + x; if (m[i]) last = x; else if (last - x <= k) out[i] = 1; } }
+  if (r) for (let y = 0; y < H; y++) { let last = -INF; for (let x = 0; x < W; x++) { const i = y * W + x; if (m[i]) last = x; else if (x - last <= k) out[i] = 1; } }
+  if (u) for (let x = 0; x < W; x++) { let last = INF; for (let y = H - 1; y >= 0; y--) { const i = y * W + x; if (m[i]) last = y; else if (last - y <= k) out[i] = 1; } }
+  if (d) for (let x = 0; x < W; x++) { let last = -INF; for (let y = 0; y < H; y++) { const i = y * W + x; if (m[i]) last = y; else if (y - last <= k) out[i] = 1; } }
+
+  if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+  const id = ctx.createImageData(W, H);
+  const px = new Uint32Array(id.data.buffer);
+  const col = white ? 0xffffffff : 0xff000000;
+  for (let i = 0; i < out.length; i++) if (out[i]) px[i] = col;
+  ctx.putImageData(id, 0, 0);
+  ctx.drawImage(img, padL, padU);
+}
+
+$('save').onclick = () => {
+  if (!img) return;
+  cv.toBlob(b => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(b);
+    a.download = 'outlined.png';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+};
+</script>
+</body>
+</html>
