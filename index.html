@@ -108,10 +108,12 @@ function render() {
   for (let y = 0; y < sh; y++) m.set(srcA.subarray(y * sw, y * sw + sw), (y + padU) * W + padL);
   const out = new Uint8Array(m);
 
-  // each direction: pixel is outlined if an opaque pixel lies within k px the opposite way. O(pixels), independent of k.
+  // horizontal pass, then vertical pass on its result, so combined sides fill the corners.
+  // a pixel is outlined if an opaque pixel lies within k px the opposite way. O(pixels), independent of k.
   const INF = 1e9;
   if (l) for (let y = 0; y < H; y++) { let last = INF; for (let x = W - 1; x >= 0; x--) { const i = y * W + x; if (m[i]) last = x; else if (last - x <= k) out[i] = 1; } }
   if (r) for (let y = 0; y < H; y++) { let last = -INF; for (let x = 0; x < W; x++) { const i = y * W + x; if (m[i]) last = x; else if (x - last <= k) out[i] = 1; } }
+  if (u || d) m.set(out);
   if (u) for (let x = 0; x < W; x++) { let last = INF; for (let y = H - 1; y >= 0; y--) { const i = y * W + x; if (m[i]) last = y; else if (last - y <= k) out[i] = 1; } }
   if (d) for (let x = 0; x < W; x++) { let last = -INF; for (let y = 0; y < H; y++) { const i = y * W + x; if (m[i]) last = y; else if (y - last <= k) out[i] = 1; } }
 
